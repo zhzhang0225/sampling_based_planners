@@ -10,7 +10,13 @@
 #define	MAP_IN      prhs[0]
 #define	ARMSTART_IN	prhs[1]
 #define	ARMGOAL_IN     prhs[2]
+#define	PLANNER_ID_IN     prhs[3]
 
+/* Planner Ids */
+#define RRT         0
+#define RRTCONNECT  1
+#define RRTSTAR     2
+#define PRM         3
 
 /* Output Arguments */
 #define	PLAN_OUT	plhs[0]
@@ -214,19 +220,7 @@ static void planner(
 	*planlength = 0;
     
     //for now just do straight interpolation between start and goal checking for the validity of samples
-    //but YOU  WILL WANT TO REPLACE THE CODE BELOW WITH YOUR PLANNER
-    
-    //RRT
-    //vector of 
-    //sample random
-    
-    //nearest neighbor
-    
-    
-    
-    //
-    
-    
+
     double distance = 0;
     int i,j;
     for (j = 0; j < numofDOFs; j++){
@@ -270,9 +264,9 @@ void mexFunction( int nlhs, mxArray *plhs[],
 { 
     
     /* Check for proper number of arguments */    
-    if (nrhs != 3) { 
+    if (nrhs != 4) { 
 	    mexErrMsgIdAndTxt( "MATLAB:planner:invalidNumInputs",
-                "Three input arguments required."); 
+                "Four input arguments required."); 
     } else if (nlhs != 2) {
 	    mexErrMsgIdAndTxt( "MATLAB:planner:maxlhs",
                 "One output argument required."); 
@@ -295,11 +289,25 @@ void mexFunction( int nlhs, mxArray *plhs[],
                 "numofDOFs in startangles is different from goalangles");         
     }
     double* armgoal_anglesV_rad = mxGetPr(ARMGOAL_IN);
-        
+ 
+    //get the planner id
+    int planner_id = (int)*mxGetPr(PLANNER_ID_IN);
+    if(planner_id < 0 || planner_id > 3){
+	    mexErrMsgIdAndTxt( "MATLAB:planner:invalidplanner_id",
+                "planner id should be between 0 and 3 inclusive");         
+    }
+    
     //call the planner
     double** plan = NULL;
     int planlength = 0;
     
+    //you can may be call the corresponding planner function here
+    //if (planner_id == RRT)
+    //{
+    //    plannerRRT(map,x_size,y_size, armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs, &plan, &planlength);
+    //}
+    
+    //dummy planner which only computes interpolated path
     planner(map,x_size,y_size, armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs, &plan, &planlength); 
     
     printf("planner returned plan of length=%d\n", planlength); 

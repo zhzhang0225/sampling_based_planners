@@ -1,4 +1,4 @@
-function[numofmoves, caught] = runtest(mapfile, armstart, armgoal)
+function[numofmoves, caught] = runtest(mapfile, armstart, armgoal, planner_id)
 
 LINKLENGTH_CELLS=10;
 envmap = load(mapfile);
@@ -12,7 +12,7 @@ hold on;
 %armplan should be a matrix of D by N 
 %where D is the number of DOFs in the arm (length of armstart) and
 %N is the number of steps in the plan 
-armplan = armplanner(envmap, armstart, armgoal); 
+armplan = armplanner(envmap, armstart, armgoal, planner_id); 
 
 fprintf(1, 'plan of length %d was found\n', size(armplan,1));
 
