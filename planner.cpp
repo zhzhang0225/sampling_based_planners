@@ -6,6 +6,14 @@
 #include <math.h>
 #include "mex.h"
 
+#include <random>
+#include <iostream>
+#include <math.h>
+#include <vector>
+#include <assert.h>
+#include <time.h>
+#include "rrt_tree.h"
+
 /* Input Arguments */
 #define	MAP_IN      prhs[0]
 #define	ARMSTART_IN	prhs[1]
@@ -202,7 +210,8 @@ int IsValidArmConfiguration(double* angles, int numofDOFs, double*	map,
 		//check the validity of the corresponding line segment
 		if(!IsValidLineSegment(x0,y0,x1,y1,map,x_size,y_size))
 				return 0;
-	}    
+	} 
+	return 1;   
 }
 
 static void planner(
@@ -249,6 +258,139 @@ static void planner(
     
     return;
 }
+
+static void plannerRRT(double*	map, 
+					int x_size,
+					int y_size,
+					double* armstart_anglesV_rad,
+					double* armgoal_anglesV_rad,
+					int numofDOFs,
+					double*** plan,
+					int* planlength)
+{
+	std::uniform_real_distribution<double> goal_bias_generation(0.0, 1.0);
+	std::uniform_real_distribution<double> joint_ang_generation(0.0, 2*PI);
+	std::random_device rd;
+	std::default_random_engine generator(rd());
+
+	int epsilon = 120; //epsilon here specifies max. num of steps for each iteration
+	double step_size = PI/180;
+
+	int num_vertices = 0;
+
+	// Create tree object 
+	RRTTree tree(numofDOFs);
+
+	// Add initial pose as vertex 
+	vector<double> start_config(armstart_anglesV_rad, armstart_anglesV_rad+numofDOFs);
+	tree.addVertex(start_config);
+	num_vertices++;
+
+	// Create while loop until goal configuration is reached 
+	bool goal_reached = false;
+	
+	while (!goal_reached) {
+		// Initialize new/ sampled configuration
+		vector<double> new_config(numofDOFs);
+
+		// Introduce goal bias here
+		double bias = goal_bias_generation(generator);
+		if (bias > 0.80) {	
+			// Set new_config to goal configuration
+			copy(armgoal_anglesV_rad, armgoal_anglesV_rad+numofDOFs, new_config.begin());
+		} 
+		else {
+			// Sample new arm configuration 
+			for (int i = 0; i < numofDOFs; i++)
+				new_config[i] = joint_ang_generation(generator);
+		}
+
+		// Find nearest neighbor 
+		int nn_index = tree.getNearestVertex(new_config);
+		std::vector<double> nn_config = tree.getNodeConfig(nn_index);
+
+		if (tree.calculateDistance(new_config, nn_config) < 0.1) continue;
+
+		// Attempt to extend to new sample 
+		bool extend = true;
+		double* temp_config = &nn_config[0];
+		double* backup_config = (double*) malloc(numofDOFs*sizeof(double));
+		int step_count = 0;
+
+		while (extend) {
+			// save configuration before increment 
+			copy(temp_config, temp_config+numofDOFs, backup_config);
+			// increment on each joint angle
+			for (int i = 0; i < numofDOFs; i++) {
+				double temp_dist = new_config[i] - temp_config[i];
+				if (temp_dist > 0.0) {
+					if (temp_dist < PI) temp_config[i] += step_size;
+					// remember to wrap the angle between 0 and 2pi
+					else temp_config[i] = ((temp_config[i] - step_size) > 0.0) ? (temp_config[i] - step_size) 
+						                                               : (2*PI + temp_config[i] - step_size);
+				}
+				else {
+					if (temp_dist > -PI) temp_config[i] -= step_size; 
+					// remember to wrap the angle between 0 and 2pi
+					else temp_config[i] = ((temp_config[i] + step_size) < 2*PI) ? (temp_config[i] + step_size) 
+						                                               : (temp_config[i] + step_size - 2*PI);
+				}
+				assert(temp_config[i] > 0.0 && temp_config[i] < 2*PI);
+ 			}
+
+			// check collision 
+			if (!IsValidArmConfiguration(temp_config, numofDOFs, map, x_size, y_size)) {
+				copy(backup_config, backup_config+numofDOFs, temp_config);
+				free(backup_config);
+				break;
+			}
+			step_count++;
+			vector<double> temp_config_vec(temp_config, temp_config+numofDOFs);
+			if (step_count > epsilon) extend = false;
+			//else if (tree.calculateDistance(temp_config_vec, new_config) < 0.1) extend = false;
+		}
+
+		if (step_count > 0) {
+			// Update ACUTUAL new configuration
+			copy(temp_config, temp_config+numofDOFs, new_config.begin());
+			// Add new_config to the tree
+			tree.addVertex(new_config);
+			tree.addEdge(nn_index, tree.getNodeID()-1);
+			num_vertices++;
+			if (num_vertices % 100 == 0) std::cout << "Num of Vertices: " << num_vertices << std::endl;
+
+			double dist_to_goal = 0.0;
+			for (int i = 0; i < numofDOFs; i++) {
+				double joint_dist = fabs(new_config[i] - armgoal_anglesV_rad[i]);
+				dist_to_goal += (joint_dist > PI) ? (2*PI-joint_dist) : joint_dist;
+			}
+			if (dist_to_goal < 0.1) goal_reached = true; 
+		}
+
+	}
+
+    std::cout << "generating the plan" << std::endl;
+	//back-track the path and return the plan
+	std::vector<int> plan_ids = tree.returnPlan();
+	int path_length = plan_ids.size();
+
+	*plan = (double**) malloc(path_length*sizeof(double*));
+	for (int i = 0; i < path_length; i++) {
+		(*plan)[i] = (double*) malloc(numofDOFs*sizeof(double)); 
+		std::vector<double> config = tree.getNodeConfig(plan_ids[path_length-i-1]);
+		//(*plan)[i] = &config[0];
+		for(int j = 0; j < numofDOFs; j++) {
+			std::cout << config[j] << "  ";
+		}
+		std::cout << std::endl;
+		copy(config.begin(), config.end(), (*plan)[i]);
+	}
+	*planlength = path_length;
+
+	return;
+}
+
+
 
 //prhs contains input parameters (3): 
 //1st is matrix with all the obstacles
@@ -302,13 +444,16 @@ void mexFunction( int nlhs, mxArray *plhs[],
     int planlength = 0;
     
     //you can may be call the corresponding planner function here
-    //if (planner_id == RRT)
-    //{
-    //    plannerRRT(map,x_size,y_size, armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs, &plan, &planlength);
-    //}
-    
-    //dummy planner which only computes interpolated path
-    planner(map,x_size,y_size, armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs, &plan, &planlength); 
+    if (planner_id == RRT)
+    {
+    	clock_t tStart = clock();
+    	plannerRRT(map,x_size,y_size, armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs, &plan, &planlength);
+    	std::cout << "Time taken for planning : " << (double)(clock() - tStart)/CLOCKS_PER_SEC << " seconds" << std::endl;
+    }
+    else {
+    	//dummy planner which only computes interpolated path
+    	planner(map,x_size,y_size, armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs, &plan, &planlength); 
+    }
     
     printf("planner returned plan of length=%d\n", planlength); 
     
@@ -325,7 +470,9 @@ void mexFunction( int nlhs, mxArray *plhs[],
             {
                 plan_out[j*planlength + i] = plan[i][j];
             }
+            free(plan[i]);
         }
+        free(plan);
     }
     else
     {
@@ -339,7 +486,8 @@ void mexFunction( int nlhs, mxArray *plhs[],
         }     
     }
     PLANLENGTH_OUT = mxCreateNumericMatrix( (mwSize)1, (mwSize)1, mxINT8_CLASS, mxREAL); 
-    int* planlength_out = mxGetPr(PLANLENGTH_OUT);
+    double* planlength_out = mxGetPr(PLANLENGTH_OUT);
+    //char* planlength_out = (char*)mxGetData(PLANLENGTH_OUT);
     *planlength_out = planlength;
 
     
