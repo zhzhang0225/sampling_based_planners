@@ -229,7 +229,7 @@ void incrementToJointAngles(int num_of_dof, double step_size, double** curr_ptr,
 			// remember to wrap the angle between 0 and 2pi
 			else (*curr_ptr)[i] = (((*curr_ptr)[i] + step_size) < 2*PI) ? ((*curr_ptr)[i] + step_size) 
 				                                                 : ((*curr_ptr)[i] + step_size - 2*PI);
-			}
+		}
 	//assert((*curr_ptr)[i] > 0.0 && (*curr_ptr)[i] < 2*PI);
 	}
 	return;
@@ -294,8 +294,8 @@ static void plannerRRT(double*	map,
 	std::random_device rd;
 	std::default_random_engine generator(rd());
 
-	int epsilon = 120; //epsilon here specifies max. num of steps for each iteration
-	double step_size = PI/180;
+	int epsilon = 60; //epsilon here specifies max. num of steps for each iteration
+	double step_size = PI/90;
 
 	int num_vertices = 0;
 
@@ -348,11 +348,11 @@ static void plannerRRT(double*	map,
 			if (!IsValidArmConfiguration(temp_config, numofDOFs, map, x_size, y_size)) {
 				copy(backup_config, backup_config+numofDOFs, temp_config);
 				extend = false;
+				break;
 			} 
-			else {
-				step_count++;
-				if (step_count > epsilon) extend = false;
-			} 
+			step_count++;
+			if (step_count > epsilon) extend = false;
+ 
 			//vector<double> temp_config_vec(temp_config, temp_config+numofDOFs);
 			//else if (tree.calculateDistance(temp_config_vec, new_config) < 0.1) extend = false;
 		}
@@ -374,6 +374,11 @@ static void plannerRRT(double*	map,
 				dist_to_goal += (joint_dist > PI) ? (2*PI-joint_dist) : joint_dist;
 			}
 			if (dist_to_goal < 0.1) goal_reached = true; 
+		}
+
+		if (num_vertices > 50000) {
+			std::cout << "Aborted due to timeout ... Please re-plan" << std::endl;
+			break; 
 		}
 	}
 
@@ -601,6 +606,162 @@ static void plannerRRTConnect(double* map,
 	return;
 }
 
+double calculateCost(std::vector<double> config1, std::vector<double> config2)
+{
+	// calcualte L1 cost between two configurations
+	assert(config1.size() == config2.size());
+	double total_cost = 0.0;
+	for (int i = 0; i < config1.size(); i++) {
+		total_cost += (fabs(config1[i]-config2[i])>PI) ? (2*PI-fabs(config1[i]-config2[i])) : fabs(config1[i]-config2[i]);
+	}
+	return total_cost;
+}
+
+static void plannerRRTStar(double*	map, 
+						   int x_size,
+						   int y_size,
+						   double* armstart_anglesV_rad,
+						   double* armgoal_anglesV_rad,
+						   int numofDOFs,
+						   double*** plan,
+						   int* planlength)
+{
+	std::uniform_real_distribution<double> goal_bias_generation(0.0, 1.0);
+	std::uniform_real_distribution<double> joint_ang_generation(0.0, 2*PI);
+	std::random_device rd;
+	std::default_random_engine generator(rd());
+
+	int epsilon = 90; //epsilon here specifies max. num of steps for each iteration
+	double step_size = PI/180;
+
+	int num_vertices = 0;
+
+	// Create tree object 
+	RRTTree tree(numofDOFs);
+
+	// Add initial pose as vertex 
+	std::vector<double> start_config(armstart_anglesV_rad, armstart_anglesV_rad+numofDOFs);
+	tree.addVertex(start_config);
+	num_vertices++;
+
+	// Create while loop until goal configuration is reached 
+	bool goal_reached = false;
+	
+	while (!goal_reached) {
+		// Initialize new/ sampled configuration
+		std::vector<double> new_config(numofDOFs);
+
+		// Introduce goal bias here
+		double bias = goal_bias_generation(generator);
+		if (bias > 0.80) {	
+			// Set new_config to goal configuration
+			copy(armgoal_anglesV_rad, armgoal_anglesV_rad+numofDOFs, new_config.begin());
+		} 
+		else {
+			// Sample new arm configuration 
+			for (int i = 0; i < numofDOFs; i++)
+				new_config[i] = joint_ang_generation(generator);
+		}
+
+		// Find nearest neighbor 
+		int nn_index = tree.getNearestVertex(new_config);
+		std::vector<double> nn_config = tree.getNodeConfig(nn_index);
+
+		if (bias < 0.80 && tree.calculateDistance(new_config, nn_config) < 1.0) continue;
+
+		// Attempt to extend to new sample 
+		bool extend = true;
+		double* temp_config = &nn_config[0];
+		double* backup_config = (double*) malloc(numofDOFs*sizeof(double));
+		int step_count = 0;
+
+		while (extend) {
+			// save configuration before increment 
+			copy(temp_config, temp_config+numofDOFs, backup_config);
+			// increment on each joint angle
+			incrementToJointAngles(numofDOFs, step_size, &temp_config, new_config);
+
+			// check collision 
+			if (!IsValidArmConfiguration(temp_config, numofDOFs, map, x_size, y_size)) {
+				copy(backup_config, backup_config+numofDOFs, temp_config);
+				extend = false;
+			} 
+			else {
+				step_count++;
+				if (step_count > epsilon) extend = false;
+			} 
+		}
+
+		free(backup_config);
+
+		if (step_count > 0) {
+			// Update ACUTUAL new configuration
+			copy(temp_config, temp_config+numofDOFs, new_config.begin());
+			// Add new_config to the tree
+			tree.addVertex(new_config);
+			
+			num_vertices++;
+			if (num_vertices % 100 == 0) std::cout << "Num of Vertices: " << num_vertices << std::endl;
+
+			// Add cost of new vertex
+			nn_config = tree.getNodeConfig(nn_index);
+			double cost_new = calculateCost(nn_config, new_config);
+			tree.setVertexCost(tree.getNodeID()-1, cost_new);
+			
+			// Find all neighbors within certain distance from new_config 
+			double radius = epsilon * step_size * numofDOFs;
+			std::vector<int> near_neighbors = tree.getNearVertices(nn_index, radius);
+			
+			// Try to find best parent for new config 
+			// (Is there better path to get ot new vertex from existing neighbors)
+			std::vector<double> neighbor_config;
+			int min_neighbor_id = near_neighbors.size()-1;
+			for (int i = 0; i < near_neighbors.size(); i++) {
+				neighbor_config = tree.getNodeConfig(near_neighbors[i]);
+				double cost_temp = tree.getVertexCost(near_neighbors[i]) + calculateCost(new_config, neighbor_config);
+				if (cost_temp < cost_new) min_neighbor_id = i;
+			}
+
+			// Add edge for new vertex now 
+			tree.addEdge(min_neighbor_id, tree.getNodeID()-1);
+
+			// TODO: try to update cost of each vertex 
+			// (Is there better path (through new vertex) to some existing neighbor w/lower cost)
+
+
+			// If so, disconnect existing node and its parent AND add new edges 
+
+
+			double dist_to_goal = 0.0;
+			for (int i = 0; i < numofDOFs; i++) {
+				double joint_dist = fabs(new_config[i] - armgoal_anglesV_rad[i]);
+				dist_to_goal += (joint_dist > PI) ? (2*PI-joint_dist) : joint_dist;
+			}
+			if (dist_to_goal < 0.1) goal_reached = true; 
+		}
+	}
+
+    std::cout << "generating the plan" << std::endl;
+	//back-track the path and return the plan
+	std::vector<int> plan_ids = tree.returnPlan();
+	int path_length = plan_ids.size();
+
+	*plan = (double**) malloc(path_length*sizeof(double*));
+	for (int i = 0; i < path_length; i++) {
+		(*plan)[i] = (double*) malloc(numofDOFs*sizeof(double)); 
+		std::vector<double> config = tree.getNodeConfig(plan_ids[path_length-i-1]);
+		//(*plan)[i] = &config[0];
+		for(int j = 0; j < numofDOFs; j++) {
+			std::cout << config[j] << "  ";
+		}
+		std::cout << std::endl;
+		copy(config.begin(), config.end(), (*plan)[i]);
+	}
+	*planlength = path_length;
+
+	return;
+}
+
 //prhs contains input parameters (3): 
 //1st is matrix with all the obstacles
 //2nd is a row vector of start angles for the arm 
@@ -663,6 +824,12 @@ void mexFunction( int nlhs, mxArray *plhs[],
     {
     	clock_t tStart = clock();
     	plannerRRTConnect(map,x_size,y_size, armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs, &plan, &planlength);
+    	std::cout << "Time taken for planning : " << (double)(clock() - tStart)/CLOCKS_PER_SEC << " seconds" << std::endl;
+    }
+    else if (planner_id == RRTSTAR)
+    {
+    	clock_t tStart = clock();
+    	plannerRRTStar(map,x_size,y_size, armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs, &plan, &planlength);
     	std::cout << "Time taken for planning : " << (double)(clock() - tStart)/CLOCKS_PER_SEC << " seconds" << std::endl;
     }
     else {

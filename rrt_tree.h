@@ -27,6 +27,8 @@ private:
 	//represent edge by its vertices' id
 	//key = child_id, value = parent_id
 	unordered_map<int, int> edges_;
+	//cost associated with each vertex (for RRT* only)
+	vector<double> costs_;
 
 public:
 	//default constructor 
@@ -37,6 +39,10 @@ public:
 	vector<double> getNodeConfig(int node_id);
 
 	void addVertex(vector<double>& vertex);
+
+	double getVertexCost(int node_id);
+
+	void setVertexCost(int node_id, double cost);
 
 	void addEdge(int parent_id, int child_id);
 
@@ -54,6 +60,8 @@ public:
 	};
 
 	int getNearestVertex(vector<double>& new_vertex);
+
+	vector<int> getNearVertices(int node_id, double radius);
 
 	vector<int> returnPlan();
 

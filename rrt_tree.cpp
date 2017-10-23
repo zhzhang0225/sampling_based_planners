@@ -27,24 +27,29 @@ void RRTTree::addVertex(vector<double>& vertex)
 	(this->node_id_)++;
 }
 
+double RRTTree::getVertexCost(int node_id)
+{
+	assert(node_id < (this.costs_).size());
+	return (this->costs_)[node_id];
+}
+
+void RRTTree::setVertexCost(int node_id, double cost) 
+{
+	if (node_id < (this->costs_).size()) {
+		// update cost for exisiting vertex
+		(this->costs_)[node_id] = cost;
+	} else {
+		// record cost for new vertex
+		assert(node_id == this->node_id_-1);
+		(this->costs_).push_back(cost);
+	}
+}
+
 void RRTTree::addEdge(int parent_id, int child_id)
 {
 	assert((this->edges_).find(child_id) == (this->edges_).end());
 	(this->edges_)[child_id] = parent_id;
 }
-
-// inline double RRTTree::calculateDistance(vector<double>& v1, vector<double>& v2)
-// {
-// 	//calculate distance between two configurations (vertices)
-// 	//as the sum of differences between all joint angles
-// 	double total_dist = 0.0;
-// 	double joint_dist = 0.0;
-// 	for (int i=0; i<(this->num_dof_); i++) {
-// 		joint_dist = fabs(v1[i]-v2[i]);
-// 		total_dist += (joint_dist < PI) ? joint_dist : (2*PI - joint_dist);
-// 	}
-// 	return total_dist;
-// }
 
 int RRTTree::getNearestVertex(vector<double>& new_vertex) 
 {
@@ -60,6 +65,18 @@ int RRTTree::getNearestVertex(vector<double>& new_vertex)
 		}
 	}
 	return min_index;
+}
+
+vector<int> RRTTree::getNearVertices(int node_id, double radius)
+{
+	//perform linear search to get neighbors within distance r to current vertex
+	vector<int> neighbors_id;
+	double curr_dist = 0.0;
+	for (int i=0; i<(this->vertices_).size(); i++) {
+		curr_dist = this->calculateDistance((this->vertices_)[node_id], (this->vertices_)[i]);
+		if (curr_dist <= radius) neighbors_id.push_back(i);
+	}
+	return neighbors_id;
 }
 
 vector<int> RRTTree::returnPlan()
