@@ -57,6 +57,8 @@ public:
 
 	vector<int> returnPlan();
 
+	vector<int> returnPlan(int node_id);
+
 };
 
 #endif 

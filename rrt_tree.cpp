@@ -75,3 +75,17 @@ vector<int> RRTTree::returnPlan()
 	plan_vertices.push_back(0);
 	return plan_vertices;
 }
+
+vector<int> RRTTree::returnPlan(int node_id)
+{
+	// return the vertices' ids along the path
+	vector<int> plan_vertices;
+	int index_iter = node_id;
+	while (index_iter) {
+		plan_vertices.push_back(index_iter);
+		index_iter = (this->edges_)[index_iter];
+	}
+	// add the start configuration
+	plan_vertices.push_back(0);
+	return plan_vertices;
+}
