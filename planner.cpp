@@ -280,6 +280,18 @@ static void planner(
     return;
 }
 
+
+double calculateCost(std::vector<double>& config1, std::vector<double>& config2)
+{
+	// calcualte L1 cost between two configurations
+	assert(config1.size() == config2.size());
+	double total_cost = 0.0;
+	for (int i = 0; i < config1.size(); i++) {
+		total_cost += (fabs(config1[i]-config2[i])>PI) ? (2*PI-fabs(config1[i]-config2[i])) : fabs(config1[i]-config2[i]);
+	}
+	return total_cost;
+}
+
 static void plannerRRT(double*	map, 
 					int x_size,
 					int y_size,
@@ -305,6 +317,7 @@ static void plannerRRT(double*	map,
 	// Add initial pose as vertex 
 	std::vector<double> start_config(armstart_anglesV_rad, armstart_anglesV_rad+numofDOFs);
 	tree.addVertex(start_config);
+	tree.setVertexCost(tree.getNodeID()-1, 0.0);
 	num_vertices++;
 
 	// Create while loop until goal configuration is reached 
@@ -322,6 +335,7 @@ static void plannerRRT(double*	map,
 		} 
 		else {
 			// Sample new arm configuration 
+			//new_config[0] = joint_ang_generation(generator)/2;
 			for (int i = 0; i < numofDOFs; i++)
 				new_config[i] = joint_ang_generation(generator);
 		}
@@ -365,8 +379,13 @@ static void plannerRRT(double*	map,
 			// Add new_config to the tree
 			tree.addVertex(new_config);
 			tree.addEdge(nn_index, tree.getNodeID()-1);
+			// Set cost for the new vertex
+			nn_config = tree.getNodeConfig(nn_index);
+			double cost_new = tree.getVertexCost(nn_index) + calculateCost(nn_config, new_config);
+			tree.setVertexCost(tree.getNodeID()-1, cost_new);
+
 			num_vertices++;
-			if (num_vertices % 100 == 0) std::cout << "Num of Vertices: " << num_vertices << std::endl;
+			if (num_vertices % 1000 == 0) std::cout << "Num of Vertices: " << num_vertices << std::endl;
 
 			double dist_to_goal = 0.0;
 			for (int i = 0; i < numofDOFs; i++) {
@@ -382,23 +401,25 @@ static void plannerRRT(double*	map,
 		}
 	}
 
-    std::cout << "generating the plan" << std::endl;
-	//back-track the path and return the plan
-	std::vector<int> plan_ids = tree.returnPlan();
-	int path_length = plan_ids.size();
+    if (num_vertices <= 50000) {
+	    std::cout << "generating the plan" << std::endl;
+		//back-track the path and return the plan
+		std::vector<int> plan_ids = tree.returnPlan();
+		int path_length = plan_ids.size();
 
-	*plan = (double**) malloc(path_length*sizeof(double*));
-	for (int i = 0; i < path_length; i++) {
-		(*plan)[i] = (double*) malloc(numofDOFs*sizeof(double)); 
-		std::vector<double> config = tree.getNodeConfig(plan_ids[path_length-i-1]);
-		//(*plan)[i] = &config[0];
-		for(int j = 0; j < numofDOFs; j++) {
-			std::cout << config[j] << "  ";
+		*plan = (double**) malloc(path_length*sizeof(double*));
+		for (int i = 0; i < path_length; i++) {
+			(*plan)[i] = (double*) malloc(numofDOFs*sizeof(double)); 
+			std::vector<double> config = tree.getNodeConfig(plan_ids[path_length-i-1]);
+			//(*plan)[i] = &config[0];
+
+			// for(int j = 0; j < numofDOFs; j++) std::cout << config[j] << "  ";
+			// std::cout << std::endl;
+			copy(config.begin(), config.end(), (*plan)[i]);
 		}
-		std::cout << std::endl;
-		copy(config.begin(), config.end(), (*plan)[i]);
+		std::cout << "Cost to goal: " << tree.getVertexCost(tree.getNodeID()-1) << std::endl;
+		*planlength = path_length;
 	}
-	*planlength = path_length;
 
 	return;
 }
@@ -419,7 +440,7 @@ static void plannerRRTConnect(double* map,
 	std::random_device rd;
 	std::default_random_engine generator(rd());
 
-	int epsilon = 60; //epsilon here specifies max. num of steps for each iteration
+	int epsilon = 30; //epsilon here specifies max. num of steps for each iteration
 	double step_size = PI/180;
 
 	int num_vertices = 0;
@@ -588,7 +609,6 @@ static void plannerRRTConnect(double* map,
 		plan2_ids = tree_g.returnPlan(nn_index);	
 	}
 	int path_length = plan1_ids.size() + plan2_ids.size();
-	std::cout << path_length << std::endl;
 
 	*plan = (double**) malloc(path_length*sizeof(double*));
 	for (int i = 0; i < plan1_ids.size(); i++) {
@@ -606,15 +626,25 @@ static void plannerRRTConnect(double* map,
 	return;
 }
 
-double calculateCost(std::vector<double> config1, std::vector<double> config2)
+bool isPathValid(std::vector<double> new_config, std::vector<double>& neighbor_config, 
+	             int numofDOFs, double* map, int x_size, int y_size)
 {
-	// calcualte L1 cost between two configurations
-	assert(config1.size() == config2.size());
-	double total_cost = 0.0;
-	for (int i = 0; i < config1.size(); i++) {
-		total_cost += (fabs(config1[i]-config2[i])>PI) ? (2*PI-fabs(config1[i]-config2[i])) : fabs(config1[i]-config2[i]);
+	double distance = 0;
+    for (int i = 0; i < numofDOFs; i++){
+        if(distance < fabs(new_config[i] - neighbor_config[i]))
+            distance = fabs(new_config[i] - neighbor_config[i]);
+    }
+    int numofsamples = (int)(distance/(PI/90));
+    if (numofsamples < 2) return true;
+
+    double* temp_config = &new_config[0];
+    for (int i = 0; i < numofsamples; i++) {
+    	for (int i = 0; i < numofDOFs; i++) {
+    		temp_config[i] += (neighbor_config[i] - new_config[i])/(double)numofsamples;
+    	}
+    	if (!IsValidArmConfiguration(temp_config, numofDOFs, map, x_size, y_size)) return false;
 	}
-	return total_cost;
+	return true;
 }
 
 static void plannerRRTStar(double*	map, 
@@ -631,8 +661,8 @@ static void plannerRRTStar(double*	map,
 	std::random_device rd;
 	std::default_random_engine generator(rd());
 
-	int epsilon = 90; //epsilon here specifies max. num of steps for each iteration
-	double step_size = PI/180;
+	int epsilon = 60; //epsilon here specifies max. num of steps for each iteration
+	double step_size = PI/90;
 
 	int num_vertices = 0;
 
@@ -642,6 +672,7 @@ static void plannerRRTStar(double*	map,
 	// Add initial pose as vertex 
 	std::vector<double> start_config(armstart_anglesV_rad, armstart_anglesV_rad+numofDOFs);
 	tree.addVertex(start_config);
+	tree.setVertexCost(tree.getNodeID()-1, 0.0);
 	num_vertices++;
 
 	// Create while loop until goal configuration is reached 
@@ -667,7 +698,7 @@ static void plannerRRTStar(double*	map,
 		int nn_index = tree.getNearestVertex(new_config);
 		std::vector<double> nn_config = tree.getNodeConfig(nn_index);
 
-		if (bias < 0.80 && tree.calculateDistance(new_config, nn_config) < 1.0) continue;
+		if (bias < 0.80 && tree.calculateDistance(new_config, nn_config) < 0.1) continue;
 
 		// Attempt to extend to new sample 
 		bool extend = true;
@@ -699,39 +730,65 @@ static void plannerRRTStar(double*	map,
 			copy(temp_config, temp_config+numofDOFs, new_config.begin());
 			// Add new_config to the tree
 			tree.addVertex(new_config);
-			
 			num_vertices++;
-			if (num_vertices % 100 == 0) std::cout << "Num of Vertices: " << num_vertices << std::endl;
+			
+			//if (num_vertices % 100 == 0) std::cout << "Num of Vertices: " << num_vertices << std::endl;
 
 			// Add cost of new vertex
 			nn_config = tree.getNodeConfig(nn_index);
-			double cost_new = calculateCost(nn_config, new_config);
+			double cost_new = tree.getVertexCost(nn_index) + calculateCost(nn_config, new_config);
 			tree.setVertexCost(tree.getNodeID()-1, cost_new);
 			
 			// Find all neighbors within certain distance from new_config 
-			double radius = epsilon * step_size * numofDOFs;
+			double radius = 1.6*pow(log(num_vertices)/num_vertices, 1/numofDOFs); //epsilon * step_size;
 			std::vector<int> near_neighbors = tree.getNearVertices(nn_index, radius);
+
+			if (num_vertices % 1000 == 0) std::cout << "Num of near neighbors: " << near_neighbors.size() << std::endl;
 			
 			// Try to find best parent for new config 
 			// (Is there better path to get ot new vertex from existing neighbors)
 			std::vector<double> neighbor_config;
-			int min_neighbor_id = near_neighbors.size()-1;
+			int min_neighbor_id = nn_index;
+			// record indices of valid neighbors of new config (i.e. collision-free)
+			std::vector<int> valid_neighbor_id;
+			
 			for (int i = 0; i < near_neighbors.size(); i++) {
 				neighbor_config = tree.getNodeConfig(near_neighbors[i]);
-				double cost_temp = tree.getVertexCost(near_neighbors[i]) + calculateCost(new_config, neighbor_config);
-				if (cost_temp < cost_new) min_neighbor_id = i;
+				if (isPathValid(new_config, neighbor_config, numofDOFs, map, x_size, y_size)) {
+					double cost_temp = tree.getVertexCost(near_neighbors[i]) + calculateCost(new_config, neighbor_config);
+					if (cost_temp + 0.1 < cost_new) {
+						// record index of x_min
+						min_neighbor_id = near_neighbors[i];
+						// update cost of new vertex
+						cost_new = cost_temp;
+						tree.setVertexCost(tree.getNodeID()-1, cost_new);
+					}
+					valid_neighbor_id.push_back(near_neighbors[i]);
+				} 
 			}
 
 			// Add edge for new vertex now 
 			tree.addEdge(min_neighbor_id, tree.getNodeID()-1);
 
-			// TODO: try to update cost of each vertex 
+			// Try to update cost of each vertex 
 			// (Is there better path (through new vertex) to some existing neighbor w/lower cost)
-
-
-			// If so, disconnect existing node and its parent AND add new edges 
-
-
+			for (int i = 0; i < valid_neighbor_id.size(); i++) {
+				if (valid_neighbor_id[i] != min_neighbor_id) {
+					neighbor_config = tree.getNodeConfig(valid_neighbor_id[i]);
+					double cost_temp = cost_new + calculateCost(new_config, neighbor_config);
+					// In case cost(near) > cost(new) + cost(new,near)
+					// If so, disconnect existing node and its parent AND add new edges 
+					if (cost_temp + 0.1 < tree.getVertexCost(valid_neighbor_id[i])) {
+						// update neighbor's cost
+						tree.setVertexCost(valid_neighbor_id[i], cost_temp);
+						// remove connection (edge) between the neighbor and its parent
+						tree.removeEdge(valid_neighbor_id[i]);
+						// add connection (edge) between the neighbor and new vertex
+						tree.addEdge(tree.getNodeID()-1, valid_neighbor_id[i]);
+					}
+				}
+			}
+			// Check whether we reach the goal 
 			double dist_to_goal = 0.0;
 			for (int i = 0; i < numofDOFs; i++) {
 				double joint_dist = fabs(new_config[i] - armgoal_anglesV_rad[i]);
@@ -739,25 +796,28 @@ static void plannerRRTStar(double*	map,
 			}
 			if (dist_to_goal < 0.1) goal_reached = true; 
 		}
-	}
-
-    std::cout << "generating the plan" << std::endl;
-	//back-track the path and return the plan
-	std::vector<int> plan_ids = tree.returnPlan();
-	int path_length = plan_ids.size();
-
-	*plan = (double**) malloc(path_length*sizeof(double*));
-	for (int i = 0; i < path_length; i++) {
-		(*plan)[i] = (double*) malloc(numofDOFs*sizeof(double)); 
-		std::vector<double> config = tree.getNodeConfig(plan_ids[path_length-i-1]);
-		//(*plan)[i] = &config[0];
-		for(int j = 0; j < numofDOFs; j++) {
-			std::cout << config[j] << "  ";
+		if (num_vertices > 50000) {
+			std::cout << "Aborted due to timeout ... Please re-plan" << std::endl;
+			break; 
 		}
-		std::cout << std::endl;
-		copy(config.begin(), config.end(), (*plan)[i]);
 	}
-	*planlength = path_length;
+
+	if (num_vertices <= 50000) {
+	    std::cout << "generating the plan" << std::endl;
+		//back-track the path and return the plan
+		std::vector<int> plan_ids = tree.returnPlan();
+		int path_length = plan_ids.size();
+
+		*plan = (double**) malloc(path_length*sizeof(double*));
+		for (int i = 0; i < path_length; i++) {
+			(*plan)[i] = (double*) malloc(numofDOFs*sizeof(double)); 
+			std::vector<double> config = tree.getNodeConfig(plan_ids[path_length-i-1]);
+			//(*plan)[i] = &config[0];
+			copy(config.begin(), config.end(), (*plan)[i]);
+		}
+		std::cout << "Cost to goal: " << tree.getVertexCost(tree.getNodeID()-1) << std::endl;
+		*planlength = path_length;
+	}
 
 	return;
 }

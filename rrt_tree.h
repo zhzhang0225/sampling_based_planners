@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_map>
 #include <assert.h>
+#include <iostream>
 
 /**************************************************** 
 Class for creating and maintaining a growing tree 
@@ -37,6 +38,10 @@ public:
 	int getNodeID();
 
 	vector<double> getNodeConfig(int node_id);
+
+	//int getParentVertex(int node_id);
+
+	void removeEdge(int child_node_id);
 
 	void addVertex(vector<double>& vertex);
 

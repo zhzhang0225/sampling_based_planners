@@ -15,6 +15,17 @@ vector<double> RRTTree::getNodeConfig(int node_id)
 	return (this->vertices_)[node_id];
 }
 
+// int RRTTree::getParentVertex(int node_id)
+// {
+// 	return (this->edges_)[node_id];
+// }
+
+void RRTTree::removeEdge(int child_node_id)
+{
+	(this->edges_).erase(child_node_id);
+	return;
+}
+
 void RRTTree::addVertex(vector<double>& vertex)
 {
 	assert(vertex.size() == this->num_dof_);
@@ -49,6 +60,7 @@ void RRTTree::addEdge(int parent_id, int child_id)
 {
 	assert((this->edges_).find(child_id) == (this->edges_).end());
 	(this->edges_)[child_id] = parent_id;
+	//cout << (this->edges_).size() << ":  " << parent_id << ", " << child_id << endl;
 }
 
 int RRTTree::getNearestVertex(vector<double>& new_vertex) 
