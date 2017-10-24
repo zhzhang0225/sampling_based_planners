@@ -610,19 +610,30 @@ static void plannerRRTConnect(double* map,
 	}
 	int path_length = plan1_ids.size() + plan2_ids.size();
 
+	double total_cost = 0.0;
+	std::vector<double> config;
+	std::vector<double> prev_config;
 	*plan = (double**) malloc(path_length*sizeof(double*));
 	for (int i = 0; i < plan1_ids.size(); i++) {
 		(*plan)[i] = (double*) malloc(numofDOFs*sizeof(double)); 
-		std::vector<double> config = tree_s.getNodeConfig(plan1_ids[plan1_ids.size()-i-1]);
+		config = tree_s.getNodeConfig(plan1_ids[plan1_ids.size()-i-1]);
 		copy(config.begin(), config.end(), (*plan)[i]);
+
+		if (i > 0) total_cost += calculateCost(prev_config, config);
+		prev_config = config;
 	}
+	prev_config = tree_g.getNodeConfig(plan1_ids[0]);
 	for (int i = 0; i < plan2_ids.size(); i++) {
 		(*plan)[i+plan1_ids.size()] = (double*) malloc(numofDOFs*sizeof(double)); 
-		std::vector<double> config = tree_g.getNodeConfig(plan2_ids[i]);
+		config = tree_g.getNodeConfig(plan2_ids[i]);
 		copy(config.begin(), config.end(), (*plan)[i+plan1_ids.size()]);
-	}
-	*planlength = path_length;
 
+		total_cost += calculateCost(prev_config, config);
+		prev_config = config;
+	}
+	std::cout << "Cost to goal: " << total_cost << std::endl;
+	*planlength = path_length;
+	
 	return;
 }
 
@@ -732,7 +743,7 @@ static void plannerRRTStar(double*	map,
 			tree.addVertex(new_config);
 			num_vertices++;
 			
-			//if (num_vertices % 100 == 0) std::cout << "Num of Vertices: " << num_vertices << std::endl;
+			if (num_vertices % 1000 == 0) std::cout << "Num of Vertices: " << num_vertices << std::endl;
 
 			// Add cost of new vertex
 			nn_config = tree.getNodeConfig(nn_index);
@@ -743,7 +754,7 @@ static void plannerRRTStar(double*	map,
 			double radius = 1.6*pow(log(num_vertices)/num_vertices, 1/numofDOFs); //epsilon * step_size;
 			std::vector<int> near_neighbors = tree.getNearVertices(nn_index, radius);
 
-			if (num_vertices % 1000 == 0) std::cout << "Num of near neighbors: " << near_neighbors.size() << std::endl;
+			//if (num_vertices % 1000 == 0) std::cout << "Num of near neighbors: " << near_neighbors.size() << std::endl;
 			
 			// Try to find best parent for new config 
 			// (Is there better path to get ot new vertex from existing neighbors)
