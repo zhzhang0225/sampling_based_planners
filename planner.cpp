@@ -13,6 +13,7 @@
 #include <assert.h>
 #include <time.h>
 #include <stack>
+#include <queue>
 #include <unordered_map>
 #include "rrt_tree.h"
 #include "prm_graph.h"
@@ -304,6 +305,12 @@ static void plannerRRT(double*	map,
 					double*** plan,
 					int* planlength)
 {
+	if (!IsValidArmConfiguration(armstart_anglesV_rad, numofDOFs, map, x_size, y_size) || 
+		!IsValidArmConfiguration(armgoal_anglesV_rad, numofDOFs, map, x_size, y_size)) {
+		std::cout << "START or GOAL is in collision. Aborted!" << std::endl;
+		return;
+	}
+
 	std::uniform_real_distribution<double> goal_bias_generation(0.0, 1.0);
 	std::uniform_real_distribution<double> joint_ang_generation(0.0, 2*PI);
 	std::random_device rd;
@@ -421,6 +428,7 @@ static void plannerRRT(double*	map,
 			copy(config.begin(), config.end(), (*plan)[i]);
 		}
 		std::cout << "Cost to goal: " << tree.getVertexCost(tree.getNodeID()-1) << std::endl;
+		std::cout << "Number of vertices: " << num_vertices << std::endl;
 		*planlength = path_length;
 	}
 
@@ -437,6 +445,12 @@ static void plannerRRTConnect(double* map,
 							  double*** plan,
 							  int* planlength)
 {
+	if (!IsValidArmConfiguration(armstart_anglesV_rad, numofDOFs, map, x_size, y_size) || 
+		!IsValidArmConfiguration(armgoal_anglesV_rad, numofDOFs, map, x_size, y_size)) {
+		std::cout << "START or GOAL is in collision. Aborted!" << std::endl;
+		return;
+	}
+
 	// Generate sampling tool
 	std::uniform_real_distribution<double> goal_bias_generation(0.0, 1.0);
 	std::uniform_real_distribution<double> joint_ang_generation(0.0, 2*PI);
@@ -635,6 +649,7 @@ static void plannerRRTConnect(double* map,
 		prev_config = config;
 	}
 	std::cout << "Cost to goal: " << total_cost << std::endl;
+	std::cout << "Number of vertices: " << num_vertices << std::endl;
 	*planlength = path_length;
 	
 	return;
@@ -670,6 +685,12 @@ static void plannerRRTStar(double*	map,
 						   double*** plan,
 						   int* planlength)
 {
+	if (!IsValidArmConfiguration(armstart_anglesV_rad, numofDOFs, map, x_size, y_size) || 
+		!IsValidArmConfiguration(armgoal_anglesV_rad, numofDOFs, map, x_size, y_size)) {
+		std::cout << "START or GOAL is in collision. Aborted!" << std::endl;
+		return;
+	}
+
 	std::uniform_real_distribution<double> goal_bias_generation(0.0, 1.0);
 	std::uniform_real_distribution<double> joint_ang_generation(0.0, 2*PI);
 	std::random_device rd;
@@ -829,6 +850,7 @@ static void plannerRRTStar(double*	map,
 			copy(config.begin(), config.end(), (*plan)[i]);
 		}
 		std::cout << "Cost to goal: " << tree.getVertexCost(tree.getNodeID()-1) << std::endl;
+		std::cout << "Number of vertices: " << num_vertices << std::endl;
 		*planlength = path_length;
 	}
 
@@ -886,7 +908,7 @@ static void plannerPRM(double*	map,
 			}
 		}
 		//if (num_vertices%100 == 0) std::cout << num_vertices << std::endl;
-		if (num_vertices >= 1000) extend = false;
+		if (num_vertices >= 5000) extend = false;
 	}
 
 	free(new_config);
@@ -904,7 +926,18 @@ static void plannerPRM(double*	map,
 	std::vector<double> start_on_graph = graph.getNodeConfig(start_on_graph_id);
 	std::vector<double> goal_on_graph =  graph.getNodeConfig(goal_on_graph_id);
 
+	if (!isPathValid(start_config, start_on_graph, numofDOFs, map, x_size, y_size)) {
+		std::cout << "Cannot connect START to the graph...Please re-plan." << std::endl;
+		return;
+	}
+
+	if (!isPathValid(goal_config, goal_on_graph, numofDOFs, map, x_size, y_size)) {
+		std::cout << "Cannot connect GOAL to the graph...Please re-plan." << std::endl;
+		return;
+	}
+
 	// Perform Depth-First Search
+	/********************************************************************
 	std::stack<int> DFS_stack;
 	DFS_stack.push(start_on_graph_id);
 
@@ -934,6 +967,40 @@ static void plannerPRM(double*	map,
 			}
 		}
 	}
+	********************************************************************/
+
+	// Perform Breath-First Search
+	std::queue<int> BFS_queue;
+	BFS_queue.push(start_on_graph_id);
+
+    bool goal_reached = false;
+	if (start_on_graph_id == goal_on_graph_id) goal_reached = true;
+
+	// Create dictionary with key = node_id (visited) and value = parent_id
+	std::unordered_map<int, int> node_info;
+
+	int curr_id;
+	while (!goal_reached && !BFS_queue.empty()) {
+		// Get the vertex at the top of stack
+		curr_id = BFS_queue.front();
+		BFS_queue.pop();
+
+		vector<int> curr_neighbors = graph.getNeighborsID(curr_id);
+		// Add neighbors to the stack
+		for (int i = 0; i < curr_neighbors.size(); i++) {
+			if (curr_neighbors[i] == goal_on_graph_id) {
+				node_info[goal_on_graph_id] = curr_id;
+				goal_reached = true;
+				break;
+			} 
+			else if (node_info.find(curr_neighbors[i]) == node_info.end()) {
+				node_info[curr_neighbors[i]] = curr_id;
+				BFS_queue.push(curr_neighbors[i]);
+			}
+		}
+	}
+
+
 
 	if (goal_reached) {
 		std::vector<int> plan_ids;
