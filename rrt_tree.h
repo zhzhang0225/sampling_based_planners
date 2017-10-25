@@ -6,7 +6,6 @@
 #include <vector>
 #include <unordered_map>
 #include <assert.h>
-#include <iostream>
 
 /**************************************************** 
 Class for creating and maintaining a growing tree 

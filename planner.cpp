@@ -12,7 +12,10 @@
 #include <vector>
 #include <assert.h>
 #include <time.h>
+#include <stack>
+#include <unordered_map>
 #include "rrt_tree.h"
+#include "prm_graph.h"
 
 /* Input Arguments */
 #define	MAP_IN      prhs[0]
@@ -411,7 +414,7 @@ static void plannerRRT(double*	map,
 		for (int i = 0; i < path_length; i++) {
 			(*plan)[i] = (double*) malloc(numofDOFs*sizeof(double)); 
 			std::vector<double> config = tree.getNodeConfig(plan_ids[path_length-i-1]);
-			//(*plan)[i] = &config[0];
+			//(*plan)[i] = &config[0]; is WRONG
 
 			// for(int j = 0; j < numofDOFs; j++) std::cout << config[j] << "  ";
 			// std::cout << std::endl;
@@ -823,12 +826,170 @@ static void plannerRRTStar(double*	map,
 		for (int i = 0; i < path_length; i++) {
 			(*plan)[i] = (double*) malloc(numofDOFs*sizeof(double)); 
 			std::vector<double> config = tree.getNodeConfig(plan_ids[path_length-i-1]);
-			//(*plan)[i] = &config[0];
 			copy(config.begin(), config.end(), (*plan)[i]);
 		}
 		std::cout << "Cost to goal: " << tree.getVertexCost(tree.getNodeID()-1) << std::endl;
 		*planlength = path_length;
 	}
+
+	return;
+}
+
+static void plannerPRM(double*	map, 
+						int x_size,
+						int y_size,
+						double* armstart_anglesV_rad,
+						double* armgoal_anglesV_rad,
+						int numofDOFs,
+						double*** plan,
+						int* planlength)
+{
+	/********************Building Roadmap************************/
+	std::uniform_real_distribution<double> joint_ang_generation(0.0, 2*PI);
+	std::random_device rd;
+	std::default_random_engine generator(rd());
+
+	// Create graph object 
+	PRMGraph graph(numofDOFs);
+
+	// K specifies number of neighbors we try to connect with new vertex
+	int K = 10;
+	int num_vertices = 0;
+
+	bool extend = true;
+	double* new_config = (double*) malloc(numofDOFs*sizeof(double));
+
+	while (extend) {
+		// Random sampling for new vertex/configuration 
+		for (int i = 0; i < numofDOFs; i++) new_config[i] = joint_ang_generation(generator);
+
+		// Check if new vertex/configuration is valid (collision-free)
+		if (IsValidArmConfiguration(new_config, numofDOFs, map, x_size, y_size)) {
+			// Add new vertex to graph
+			std::vector<double> new_vertex(5,0.0);
+			copy(new_config, new_config+numofDOFs, new_vertex.begin());
+			graph.addVertex(new_vertex);
+			num_vertices++;
+
+			if (num_vertices > 100) {
+				// Find neighbors of new vertex in the graph
+				std::vector<int> knn_id = graph.findKNN(new_vertex, K);
+
+				// Check if the path from new vertex to the neighbor is valid (collision-free)
+				std::vector<double> neighbor_vertex;
+				for (int i = 0; i < knn_id.size(); i++) {
+					neighbor_vertex = graph.getNodeConfig(knn_id[i]);
+					// If valid, add edge between new vertex and the neighbor in the graph 
+					if (isPathValid(new_vertex, neighbor_vertex, numofDOFs, map, x_size, y_size))
+						graph.addEdge(knn_id[i], graph.getCurrentNodeID()-1);
+				}
+			}
+		}
+		//if (num_vertices%100 == 0) std::cout << num_vertices << std::endl;
+		if (num_vertices >= 1000) extend = false;
+	}
+
+	free(new_config);
+
+	std::cout << "Roadmap construction is completed. Searching for path now." << std::endl;
+
+	/********************Searching Path*************************/
+
+	std::vector<double> start_config(armstart_anglesV_rad, armstart_anglesV_rad + numofDOFs);
+	std::vector<double> goal_config(armgoal_anglesV_rad, armgoal_anglesV_rad + numofDOFs); 
+
+	int start_on_graph_id = graph.getNearestVertex(start_config);
+	int goal_on_graph_id = graph.getNearestVertex(goal_config);
+
+	std::vector<double> start_on_graph = graph.getNodeConfig(start_on_graph_id);
+	std::vector<double> goal_on_graph =  graph.getNodeConfig(goal_on_graph_id);
+
+	// Perform Depth-First Search
+	std::stack<int> DFS_stack;
+	DFS_stack.push(start_on_graph_id);
+
+    bool goal_reached = false;
+	if (start_on_graph_id == goal_on_graph_id) goal_reached = true;
+
+	// Create dictionary with key = node_id (visited) and value = parent_id
+	std::unordered_map<int, int> node_info;
+
+	int curr_id;
+	while (!goal_reached && !DFS_stack.empty()) {
+		// Get the vertex at the top of stack
+		curr_id = DFS_stack.top();
+		DFS_stack.pop();
+
+		vector<int> curr_neighbors = graph.getNeighborsID(curr_id);
+		// Add neighbors to the stack
+		for (int i = 0; i < curr_neighbors.size(); i++) {
+			if (curr_neighbors[i] == goal_on_graph_id) {
+				node_info[goal_on_graph_id] = curr_id;
+				goal_reached = true;
+				break;
+			} 
+			else if (node_info.find(curr_neighbors[i]) == node_info.end()) {
+				node_info[curr_neighbors[i]] = curr_id;
+				DFS_stack.push(curr_neighbors[i]);
+			}
+		}
+	}
+
+	if (goal_reached) {
+		std::vector<int> plan_ids;
+		int index_iter = goal_on_graph_id;
+		double total_cost = 0.0;
+
+		while (index_iter != start_on_graph_id) {
+			plan_ids.push_back(index_iter);
+			index_iter = node_info[index_iter];
+		}
+		plan_ids.push_back(start_on_graph_id);
+
+		int path_length = plan_ids.size()+2;
+		*plan = (double**) malloc(path_length*sizeof(double*));
+
+		(*plan)[0] = (double*) malloc(numofDOFs*sizeof(double));
+		copy(armstart_anglesV_rad, armstart_anglesV_rad + numofDOFs, (*plan)[0]);
+
+		std::vector<double> config;
+		std::vector<double> prev_config = start_config;
+
+		for (int i = 0; i < plan_ids.size(); i++) {
+			(*plan)[i+1] = (double*) malloc(numofDOFs*sizeof(double)); 
+			config = graph.getNodeConfig(plan_ids[plan_ids.size()-i-1]);
+			copy(config.begin(), config.end(), (*plan)[i+1]);
+
+			if (i > 0) total_cost += calculateCost(prev_config, config);
+			prev_config = config;
+		}
+
+		(*plan)[path_length-1] = (double*) malloc(numofDOFs*sizeof(double));
+		copy(armgoal_anglesV_rad, armgoal_anglesV_rad + numofDOFs, (*plan)[path_length-1]);
+
+		total_cost += calculateCost(prev_config, goal_config);
+
+		std::cout << "Cost to goal: " << total_cost << std::endl;
+		*planlength = path_length;
+	}
+	else {
+		std::cout << "Unable to connect START and GOAL on exisiting roadmap" << std::endl;
+	}
+
+
+	/**************For visualizing vertices only***************/
+
+	// *plan = (double**) malloc(num_vertices*sizeof(double*));
+
+	// for (int i = 0; i < num_vertices; i++) {
+	// 	(*plan)[i] = (double*) malloc(numofDOFs*sizeof(double)); 
+	// 	std::vector<double> config = graph.getNodeConfig(i);
+	// 	copy(config.begin(), config.end(), (*plan)[i]);
+	// 	for(int j = 0; j < numofDOFs; j++) std::cout << (*plan)[i][j] << "  ";
+	// 	std::cout << std::endl;
+	// }
+	// *planlength = num_vertices;
+	/*********************************************************/
 
 	return;
 }
@@ -901,6 +1062,12 @@ void mexFunction( int nlhs, mxArray *plhs[],
     {
     	clock_t tStart = clock();
     	plannerRRTStar(map,x_size,y_size, armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs, &plan, &planlength);
+    	std::cout << "Time taken for planning : " << (double)(clock() - tStart)/CLOCKS_PER_SEC << " seconds" << std::endl;
+    }
+    else if (planner_id == PRM)
+    {
+    	clock_t tStart = clock();
+    	plannerPRM(map,x_size,y_size, armstart_anglesV_rad, armgoal_anglesV_rad, numofDOFs, &plan, &planlength);
     	std::cout << "Time taken for planning : " << (double)(clock() - tStart)/CLOCKS_PER_SEC << " seconds" << std::endl;
     }
     else {

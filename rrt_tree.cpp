@@ -60,7 +60,6 @@ void RRTTree::addEdge(int parent_id, int child_id)
 {
 	assert((this->edges_).find(child_id) == (this->edges_).end());
 	(this->edges_)[child_id] = parent_id;
-	//cout << (this->edges_).size() << ":  " << parent_id << ", " << child_id << endl;
 }
 
 int RRTTree::getNearestVertex(vector<double>& new_vertex) 
